@@ -1,0 +1,38 @@
+{
+  "rules": {
+    "codes": {
+      ".read": "auth != null",
+      "$code": {
+        ".write": "auth != null && (!data.exists() || !newData.exists() || newData.val() === data.val())"
+      }
+    },
+    "games": {
+      "$gid": {
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() || data.child('meta/createdBy').val() === auth.uid)",
+        "players": {
+          "$uid": {
+            ".write": "auth != null && ($uid === auth.uid || root.child('games').child($gid).child('meta/createdBy').val() === auth.uid)"
+          }
+        },
+        "presence": {
+          "$uid": {
+            ".write": "auth != null && $uid === auth.uid"
+          }
+        },
+        "wordpool": {
+          "$uid": {
+            ".write": "auth != null && ($uid === auth.uid || root.child('games').child($gid).child('meta/createdBy').val() === auth.uid)"
+          }
+        },
+        "drafts": {
+          "$round": {
+            "$chainId": {
+              ".write": "auth != null && (root.child('games').child($gid).child('assignments').child($round).child($chainId).val() === auth.uid || root.child('games').child($gid).child('meta/createdBy').val() === auth.uid)"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "lawn-dish-dance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Telestrations-style party game with a game master, virtual passing, and a shared display.",
+  "scripts": {
+    "serve": "python3 -m http.server 5173",
+    "test": "vitest run",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "devDependencies": {
+    "firebase": "^12.14.0",
+    "vitest": "^2.1.9"
+  }
+}
