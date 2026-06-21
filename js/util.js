@@ -21,19 +21,33 @@ export function makeId(len = 12) {
 }
 
 /**
- * Segment type for a given round index.
- * Round 0 is the seed word; then odd=image, even=word.
+ * Segment type for a given round index, taking an optional start offset into
+ * account. The offset is 1 when even player counts shift the chain to start
+ * with an image so the final pass is always a word/guess.
  * @param {number} round
+ * @param {number} [offset=0] - 0 for odd player counts, 1 for even
  * @returns {"word"|"image"}
  */
-export function segmentType(round) {
-  return round % 2 === 0 ? "word" : "image";
+export function segmentType(round, offset = 0) {
+  return (round + offset) % 2 === 0 ? "word" : "image";
+}
+
+/**
+ * Start offset for a game with the given number of passes. Returns 1 when
+ * passes is odd (even player count, draw-first) so that the final pass is
+ * always a word/guess. Returns 0 otherwise (word-first).
+ * @param {number} passes
+ * @returns {0|1}
+ */
+export function startOffset(passes) {
+  return passes % 2 === 0 ? 0 : 1;
 }
 
 /**
  * Compute the effective number of passes given player count + optional GM
- * override. Result is always even (so the chain ends on a word) and >= 2.
- * Default = (players - 1) rounded DOWN to even. Override is also nudged to even.
+ * override. Default = players - 1 (minimum 2). With even player counts this
+ * yields an odd passes value; callers use startOffset(passes) to flip the
+ * initial segment type so the chain still ends on a word/guess.
  * @param {number} players
  * @param {number|null} override
  * @returns {number}
@@ -41,13 +55,25 @@ export function segmentType(round) {
 export function effectivePasses(players, override) {
   let raw = override != null ? override : players - 1;
   if (!Number.isFinite(raw)) raw = 2;
-  let even = Math.floor(raw / 2) * 2; // round down to even
-  return Math.max(2, even);
+  return Math.max(2, Math.floor(raw));
 }
 
 /** Total rounds (segments) in a chain = seed + passes. */
 export function totalRounds(passes) {
   return passes + 1;
+}
+
+/**
+ * Returns the correct timer duration for a phase type.
+ * Draw phases use drawTimerSec; word/guess phases use wordTimerSec.
+ * Falls back to timerDurationSec for backward compatibility, then to 60s.
+ * @param {"word"|"image"} roundType
+ * @param {object} [settings]
+ * @returns {number} duration in seconds
+ */
+export function getPhaseDuration(roundType, settings = {}) {
+  if (roundType === "image") return settings.drawTimerSec ?? settings.timerDurationSec ?? 60;
+  return settings.wordTimerSec ?? settings.timerDurationSec ?? 60;
 }
 
 /** Build the deep-link URL a player uses to join a given game code. */

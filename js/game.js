@@ -4,7 +4,7 @@
 import {
   db, ref, get, set, update, onValue, onDisconnect, serverTimestamp, ensureAuth,
 } from "./firebase.js";
-import { makeCode, makeId, segmentType, effectivePasses } from "./util.js";
+import { makeCode, makeId, segmentType, startOffset, effectivePasses, getPhaseDuration } from "./util.js";
 import { assignItems } from "./assign.js";
 import { serverNow } from "./timer.js";
 
@@ -36,8 +36,14 @@ function registerPresence(gameId, uid) {
 
 /** Create a game and return { gameId, code, uid }. Caller becomes the GM. */
 export async function createGame({
-  gmName, gmPlays, timerDurationSec = 60, passesOverride = null,
-  useWordBank = false, wordList = null, crowdWords = false,
+  gmName, gmPlays,
+  /**
+   * @deprecated Use drawTimerSec and wordTimerSec instead.
+   * Kept for backward compatibility; used as a fallback by getPhaseDuration.
+   */
+  timerDurationSec = 60,
+  drawTimerSec = 45, wordTimerSec = 30,
+  passesOverride = null, useWordBank = false, wordList = null, crowdWords = false,
 }) {
   const uid = await ensureAuth();
   const gameId = makeId(16);
@@ -52,11 +58,13 @@ export async function createGame({
     [`${G(gameId)}/settings`]: {
       passesOverride: passesOverride ?? null,
       timerDurationSec,
+      drawTimerSec,
+      wordTimerSec,
       useWordBank: !!useWordBank,
       wordList: wordList && wordList.length ? wordList : null,
       crowdWords: !!crowdWords,
     },
-    [`${G(gameId)}/round`]: { index: -1, type: "word", state: "lobby" },
+    [`${G(gameId)}/round`]: { index: -1, type: "word", state: "lobby", startOffset: 0 },
     [`${G(gameId)}/players/${uid}`]: {
       name: gmName || "Host", joinedAt: serverTimestamp(), connected: true, isGM: true,
     },
@@ -108,10 +116,12 @@ export async function ensurePlayer(gameId, name) {
 }
 
 /** GM-only: update lobby settings before the game starts. */
-export async function updateSettings(gameId, { gmPlays, timerDurationSec, passesOverride, useWordBank, wordList, crowdWords }) {
+export async function updateSettings(gameId, { gmPlays, timerDurationSec, drawTimerSec, wordTimerSec, passesOverride, useWordBank, wordList, crowdWords }) {
   const updates = {};
   if (gmPlays !== undefined) updates["meta/gmPlays"] = !!gmPlays;
   if (timerDurationSec !== undefined) updates["settings/timerDurationSec"] = timerDurationSec;
+  if (drawTimerSec !== undefined) updates["settings/drawTimerSec"] = drawTimerSec;
+  if (wordTimerSec !== undefined) updates["settings/wordTimerSec"] = wordTimerSec;
   if (passesOverride !== undefined) updates["settings/passesOverride"] = passesOverride ?? null;
   if (useWordBank !== undefined) updates["settings/useWordBank"] = !!useWordBank;
   if (wordList !== undefined) updates["settings/wordList"] = wordList && wordList.length ? wordList : null;
@@ -143,13 +153,15 @@ function activeMembers(game) {
 
 // --- start ----------------------------------------------------------------
 
-/** GM-only: leave the lobby and start round 0 (everyone writes a seed word). */
+/** GM-only: leave the lobby and start round 0 (everyone writes a seed word or draws). */
 export async function startGame(gameId) {
   const game = await snap(G(gameId));
   const pool = poolMembers(game).filter((p) => game.players[p].connected !== false);
   if (pool.length < 2) throw new Error("Need at least 2 connected players to start");
 
   const passes = effectivePasses(pool.length, game.settings.passesOverride);
+  const offset = startOffset(passes);
+  const firstType = segmentType(0, offset);
   const updates = {};
   const assignments0 = {};
   pool.forEach((p) => {
@@ -158,11 +170,13 @@ export async function startGame(gameId) {
     assignments0[cid] = p;
   });
   updates["assignments/0"] = assignments0;
-  updates["round"] = { index: 0, type: "word", state: "active" };
+  updates["round"] = { index: 0, type: firstType, state: "active", startOffset: offset };
   updates["meta/status"] = "playing";
   updates["meta/totalPasses"] = passes;
+  updates["meta/startOffset"] = offset;
   updates["drafts"] = null;
-  updates["timer"] = startedTimer(game.settings.timerDurationSec);
+  updates["submitted"] = null;
+  updates["timer"] = startedTimer(getPhaseDuration(firstType, game.settings));
   await update(ref(db, G(gameId)), updates);
   return { passes };
 }
@@ -200,7 +214,11 @@ export async function addTime(gameId, seconds) {
 }
 
 export async function restartTimer(gameId) {
-  const dur = await snap(`${G(gameId)}/settings/timerDurationSec`);
+  const [settings, round] = await Promise.all([
+    snap(`${G(gameId)}/settings`),
+    snap(`${G(gameId)}/round`),
+  ]);
+  const dur = getPhaseDuration(round?.type || "word", settings || {});
   await update(ref(db, `${G(gameId)}/timer`), startedTimer(dur));
 }
 
@@ -209,6 +227,18 @@ export async function restartTimer(gameId) {
 /** A player writes their working buffer for the chain they're assigned. */
 export async function saveDraft(gameId, round, chainId, payload) {
   await set(ref(db, `${G(gameId)}/drafts/${round}/${chainId}`), payload);
+}
+
+/**
+ * A player explicitly submits their work for the current chain/round.
+ * Saves the draft and marks the chain as submitted for this round.
+ * The host (game.js advance) clears submitted on every phase transition.
+ */
+export async function submitChain(gameId, round, chainId, payload) {
+  const updates = {};
+  if (payload) updates[`drafts/${round}/${chainId}`] = payload;
+  updates[`submitted/${round}/${chainId}`] = true;
+  await update(ref(db, G(gameId)), updates);
 }
 
 // --- advance (the pass) ---------------------------------------------------
@@ -221,6 +251,7 @@ export async function saveDraft(gameId, round, chainId, payload) {
 export async function advance(gameId) {
   const game = await snap(G(gameId));
   const r = game.round.index;
+  const offset = game.meta?.startOffset ?? 0;
   const updates = {};
   const assignR = game.assignments?.[r] || {}; // chainId -> uid
   const draftsR = game.drafts?.[r] || {}; // chainId -> { word | drawing }
@@ -230,8 +261,8 @@ export async function advance(gameId) {
   Object.keys(assignR).forEach((cid) => {
     const uid = assignR[cid];
     const d = draftsR[cid] || {};
-    const seg = { type: segmentType(r), playerId: uid, submittedAt: serverTimestamp() };
-    if (segmentType(r) === "word") seg.word = String(d.word || "").slice(0, 80);
+    const seg = { type: segmentType(r, offset), playerId: uid, submittedAt: serverTimestamp() };
+    if (segmentType(r, offset) === "word") seg.word = String(d.word || "").slice(0, 80);
     else seg.drawing = d.drawing || { w: 1, h: 1, strokes: [] };
     updates[`chains/${cid}/segments/${r}`] = seg;
     chains[cid] = chains[cid] || {};
@@ -252,6 +283,7 @@ export async function advance(gameId) {
     updates["round/state"] = "review";
     updates["meta/status"] = "review";
     updates["timer"] = { state: "paused", remainingMs: 0, durationSec: game.settings.timerDurationSec, endsAt: null };
+    updates["submitted"] = null;
     await update(ref(db, G(gameId)), updates);
     return { finished: true };
   }
@@ -297,10 +329,12 @@ export async function advance(gameId) {
   // 4. assign the next round
   const items = activeChainIds.map((cid) => ({ chainId: cid, authors: authorsOf(cid) }));
   const { byChain } = assignItems(items, active);
+  const nextType = segmentType(r + 1, offset);
   updates[`assignments/${r + 1}`] = byChain;
-  updates["round"] = { index: r + 1, type: segmentType(r + 1), state: "active" };
+  updates["round"] = { index: r + 1, type: nextType, state: "active", startOffset: offset };
   updates["drafts"] = null;
-  updates["timer"] = startedTimer(game.settings.timerDurationSec);
+  updates["submitted"] = null;
+  updates["timer"] = startedTimer(getPhaseDuration(nextType, game.settings));
   await update(ref(db, G(gameId)), updates);
   return { finished: false, round: r + 1 };
 }
@@ -328,10 +362,11 @@ export async function playAgain(gameId) {
   const players = game.players || {};
   const updates = {
     chains: null, assignments: null, drafts: null, highlights: null, timer: null,
-    wordpool: null,
+    wordpool: null, submitted: null,
     "meta/totalPasses": null,
+    "meta/startOffset": null,
     "meta/status": "lobby",
-    round: { index: -1, type: "word", state: "lobby" },
+    round: { index: -1, type: "word", state: "lobby", startOffset: 0 },
   };
   Object.keys(players).forEach((uid) => {
     const here = uid === game.meta.createdBy || presence[uid] === true || players[uid].connected === true;

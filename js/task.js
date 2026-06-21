@@ -2,7 +2,7 @@
 // (word input, word-bank choices, or drawing pad), saves drafts live, and
 // preserves in-progress canvases across host re-renders. Used by both the
 // player view and the GM panel (when the host is also playing).
-import { saveDraft } from "./game.js";
+import { saveDraft, submitChain } from "./game.js";
 import { segmentType, esc } from "./util.js";
 import { createDrawingPad, renderDrawing } from "./canvas.js";
 import { DEFAULT_WORDS, pickWords } from "./wordbank.js";
@@ -21,10 +21,20 @@ export function createTaskController({ gameId, uid, container }) {
   let sig = null;
   let game = null;
 
+  function roundOffset() {
+    return game?.round?.startOffset ?? game?.meta?.startOffset ?? 0;
+  }
+
   function myChains() {
     const r = game?.round?.index ?? -1;
     const a = game?.assignments?.[r] || {};
     return Object.keys(a).filter((c) => a[c] === uid).sort();
+  }
+
+  /** Whether a given chain has been explicitly submitted this round. */
+  function isSubmitted(cid) {
+    const r = game?.round?.index ?? -1;
+    return !!game?.submitted?.[r]?.[cid];
   }
 
   function teardownPads() {
@@ -48,16 +58,18 @@ export function createTaskController({ gameId, uid, container }) {
 
   function renderTask(cid, r) {
     const chain = game.chains?.[cid] || {};
-    const type = segmentType(r);
+    const offset = roundOffset();
+    const type = segmentType(r, offset);
     const prev = chain.segments?.[r - 1];
+    const submitted = isSubmitted(cid);
 
     const wrap = document.createElement("div");
     wrap.className = "card task";
 
-    if (r === 0 && game.settings?.useWordBank) {
+    if (r === 0 && type === "word" && game.settings?.useWordBank) {
       wrap.innerHTML = `<h2>Your starting word</h2><p class="muted">Pick one for someone to draw.</p>`;
       wrap.appendChild(mkWordChoices(cid));
-    } else if (r === 0) {
+    } else if (r === 0 && type === "word") {
       wrap.innerHTML = `<h2>Your starting word</h2><p class="muted">Pick a word or short phrase for someone to draw.</p>`;
       wrap.appendChild(mkWordInput(cid));
     } else if (type === "word") {
@@ -68,13 +80,22 @@ export function createTaskController({ gameId, uid, container }) {
       wrap.appendChild(mkWordInput(cid));
       queueMicrotask(() => renderDrawing(c, prev?.drawing));
     } else {
-      wrap.innerHTML = `<h2>Draw this</h2><p class="prompt-word">${esc(prev?.word || "…")}</p>`;
+      // image / draw phase — includes even-player "draw first" round 0
+      const prompt = r === 0 ? "Draw anything!" : (prev?.word || "…");
+      wrap.innerHTML = `<h2>Draw this</h2><p class="prompt-word">${esc(prompt)}</p>`;
       const c = document.createElement("canvas");
       c.className = "pad";
       wrap.appendChild(c);
       wrap.appendChild(mkTools(cid));
       queueMicrotask(() => { pads[cid] = createDrawingPad(c); });
     }
+
+    // Submit button (shown for word and image phases during active play)
+    wrap.appendChild(mkSubmitBtn(cid));
+
+    // Lock the UI if already submitted
+    if (submitted) lockTask(wrap, cid);
+
     container.appendChild(wrap);
   }
 
@@ -86,6 +107,32 @@ export function createTaskController({ gameId, uid, container }) {
     inp.addEventListener("input", () => saveNow(cid));
     wordEls[cid] = inp;
     return inp;
+  }
+
+  /** Submit button: saves draft, marks chain submitted, locks inputs. */
+  function mkSubmitBtn(cid) {
+    const btn = document.createElement("button");
+    btn.className = "primary submit-btn";
+    btn.textContent = "✓ Submit";
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      const r = game.round.index;
+      const payload = currentPayload(cid);
+      lastSaved[cid] = JSON.stringify(payload);
+      submitChain(gameId, r, cid, payload).catch(() => { btn.disabled = false; });
+    });
+    return btn;
+  }
+
+  /** Disable all interactive elements inside a task card (post-submit). */
+  function lockTask(wrap, cid) {
+    wrap.querySelectorAll("input, button, textarea").forEach((el) => { el.disabled = true; });
+    if (pads[cid]) pads[cid].setLocked(true);
+    const waiting = document.createElement("p");
+    waiting.className = "muted waiting-msg";
+    waiting.textContent = "✓ Submitted — waiting for others…";
+    wrap.appendChild(waiting);
   }
 
   function mkWordChoices(cid) {
@@ -189,6 +236,18 @@ export function createTaskController({ gameId, uid, container }) {
     }
     const newSig = `t|${g.round.index}|${chains.join(",")}`;
     if (newSig !== sig) { sig = newSig; rebuild(); }
+
+    // Apply lock to any newly-submitted task cards. rebuild() already locks cards
+    // that were submitted at render time; this catches submissions received after
+    // the initial render without triggering a full rebuild.
+    chains.forEach((cid) => {
+      if (!isSubmitted(cid)) return;
+      const cards = container.querySelectorAll(".task");
+      const idx = chains.indexOf(cid);
+      const card = cards[idx];
+      if (card && !card.querySelector(".waiting-msg")) lockTask(card, cid);
+    });
+
     return { hasTask: true };
   }
 

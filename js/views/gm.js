@@ -7,7 +7,7 @@ import {
   addTime, restartTimer, toggleHighlight, endGame, playAgain,
 } from "../game.js";
 import { remainingMs, fmtClock } from "../timer.js";
-import { effectivePasses, joinUrl, esc } from "../util.js";
+import { effectivePasses, startOffset, joinUrl, esc } from "../util.js";
 import { renderDrawing } from "../canvas.js";
 import { parseWordList } from "../wordbank.js";
 import { createTaskController } from "../task.js";
@@ -19,6 +19,7 @@ export async function mount(el, params) {
   let game = null;
   let sig = null;
   let isHost = false;
+  let advancing = false; // guard against concurrent auto-advance calls
 
   el.innerHTML = `<div class="gm"><div id="gm-body"></div></div>`;
   const body = el.querySelector("#gm-body");
@@ -66,7 +67,15 @@ export async function mount(el, params) {
       <div class="card">
         <h2>Settings</h2>
         <label class="row"><input type="checkbox" id="s-plays" ${game.meta.gmPlays ? "checked" : ""}/> I'm also playing</label>
-        <label>Seconds per turn <input type="number" id="s-timer" min="10" max="600" value="${game.settings.timerDurationSec}"/></label>
+        <details class="panel">
+          <summary>⏱ Timer settings</summary>
+          <label>Draw timer (seconds)
+            <input type="number" id="s-draw-timer" min="5" max="600" value="${game.settings.drawTimerSec ?? 45}"/>
+          </label>
+          <label>Word / guess timer (seconds)
+            <input type="number" id="s-word-timer" min="5" max="600" value="${game.settings.wordTimerSec ?? 30}"/>
+          </label>
+        </details>
         <label>Passes <span class="hint">(blank = auto)</span>
           <input type="number" id="s-passes" min="2" max="40" value="${game.settings.passesOverride ?? ""}" placeholder="auto"/></label>
         <label class="row"><input type="checkbox" id="s-bank" ${game.settings.useWordBank ? "checked" : ""}/> Word bank for starting words</label>
@@ -88,14 +97,16 @@ export async function mount(el, params) {
     const $ = (s) => body.querySelector(s);
     const persist = () => updateSettings(gameId, {
       gmPlays: $("#s-plays").checked,
-      timerDurationSec: Math.max(10, Number($("#s-timer").value) || 60),
+      drawTimerSec: Math.max(5, Number($("#s-draw-timer").value) || 45),
+      wordTimerSec: Math.max(5, Number($("#s-word-timer").value) || 30),
       passesOverride: $("#s-passes").value.trim() === "" ? null : Number($("#s-passes").value),
       useWordBank: $("#s-bank").checked,
       wordList: $("#s-bank").checked ? parseWordList($("#s-words").value) : null,
       crowdWords: $("#s-bank").checked && $("#s-crowd").checked,
     }).catch(() => {});
     $("#s-plays").addEventListener("change", persist);
-    $("#s-timer").addEventListener("change", persist);
+    $("#s-draw-timer").addEventListener("change", persist);
+    $("#s-word-timer").addEventListener("change", persist);
     $("#s-passes").addEventListener("change", persist);
     $("#s-bank").addEventListener("change", () => { $("#s-bank-opts").hidden = !$("#s-bank").checked; persist(); });
     $("#s-crowd").addEventListener("change", persist);
@@ -108,7 +119,11 @@ export async function mount(el, params) {
   function renderPlaying() {
     const r = game.round.index;
     const total = game.meta.totalPasses;
-    const label = r === 0 ? "Starting word" : game.round.type === "word" ? `Pass ${r}: write a word` : `Pass ${r}: draw it`;
+    const offset = game.meta?.startOffset ?? 0;
+    const isDrawPhase = game.round.type === "image";
+    const label = r === 0
+      ? (isDrawPhase ? "Starting drawing" : "Starting word")
+      : (isDrawPhase ? `Pass ${r}: draw it` : `Pass ${r}: write a word`);
 
     body.innerHTML = `
       <div class="card center">
@@ -205,17 +220,26 @@ export async function mount(el, params) {
       const ms = remainingMs(game.timer);
       clock.textContent = fmtClock(ms);
       clock.classList.toggle("low", ms < 10000);
+
+      // Auto-advance when timer expires (GM is authoritative)
+      if (isHost && !advancing && ms === 0 && game.round.state === "active") {
+        advancing = true;
+        task.flush().then(() => advance(gameId)).catch(() => {}).finally(() => { advancing = false; });
+      }
     }
     const sub = body.querySelector("#subcount");
     if (sub && game?.meta?.status === "playing") {
       const r = game.round.index;
       const assigned = Object.keys(game.assignments?.[r] || {});
-      const drafts = game.drafts?.[r] || {};
-      const done = assigned.filter((c) => {
-        const d = drafts[c];
-        return d && (d.word?.trim() || (d.drawing?.strokes?.length));
-      }).length;
-      sub.textContent = `${done} / ${assigned.length} submitted`;
+      const submittedMap = game.submitted?.[r] || {};
+      const done = assigned.filter((c) => submittedMap[c]).length;
+      sub.textContent = `${done} / ${assigned.length} ready`;
+
+      // Auto-advance when all assigned chains are explicitly submitted
+      if (isHost && !advancing && assigned.length > 0 && done === assigned.length && game.round.state === "active") {
+        advancing = true;
+        task.flush().then(() => advance(gameId)).catch(() => {}).finally(() => { advancing = false; });
+      }
     }
     const pc = body.querySelector("#pcount");
     if (pc) pc.textContent = String(Object.keys(game.players || {}).length);
@@ -236,7 +260,9 @@ export async function mount(el, params) {
     if (poolLine) {
       const n = poolCount();
       const passes = effectivePasses(n, game.settings.passesOverride);
-      poolLine.innerHTML = `Pool: <b>${n}</b> connected player(s) → each chain passes <b>${passes}</b> times (ends on a word).`;
+      const offset = startOffset(passes);
+      const firstAction = offset ? "draw" : "write a word";
+      poolLine.innerHTML = `Pool: <b>${n}</b> connected player(s) → each chain passes <b>${passes}</b> times (starts with ${firstAction}, ends on a word).`;
     }
     const crowdCount = body.querySelector("#crowd-count");
     if (crowdCount) {
