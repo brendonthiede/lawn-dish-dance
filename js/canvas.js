@@ -147,6 +147,20 @@ export function createDrawingPad(canvas, { color = "#111827", width = 0.012 } = 
     setWidth(w) {
       curWidth = w;
     },
+    /** Lock or unlock the pad to prevent further drawing (e.g. after submit). */
+    setLocked(locked) {
+      if (locked) {
+        canvas.removeEventListener("pointerdown", down);
+        canvas.removeEventListener("pointermove", move);
+        canvas.style.cursor = "default";
+        canvas.style.opacity = "0.7";
+      } else {
+        canvas.addEventListener("pointerdown", down);
+        canvas.addEventListener("pointermove", move);
+        canvas.style.cursor = "crosshair";
+        canvas.style.opacity = "";
+      }
+    },
     destroy() {
       canvas.removeEventListener("pointerdown", down);
       canvas.removeEventListener("pointermove", move);
