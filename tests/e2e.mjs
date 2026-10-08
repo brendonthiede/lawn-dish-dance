@@ -91,6 +91,10 @@ async function saveDraft(c, gameId, round, chainId, payload) {
   await set(ref(c.db, `${G(gameId)}/drafts/${round}/${chainId}`), payload);
 }
 
+async function submitChain(c, gameId, round, chainId, payload) {
+  await update(ref(c.db, G(gameId)), { [`drafts/${round}/${chainId}`]: payload, [`submitted/${round}/${chainId}`]: true });
+}
+
 async function advance(host, gameId) {
   const game = await snap(host.db, G(gameId));
   const r = game.round.index;
@@ -113,7 +117,7 @@ async function advance(host, gameId) {
 
   if (r >= game.meta.totalPasses) {
     Object.keys(chains).forEach((cid) => { if (chains[cid].status === "active") updates[`chains/${cid}/status`] = "complete"; });
-    updates["round/state"] = "review"; updates["meta/status"] = "review";
+    updates["round/state"] = "review"; updates["meta/status"] = "review"; updates["submitted"] = null;
     await update(ref(host.db, G(gameId)), updates);
     return { finished: true };
   }
@@ -143,6 +147,7 @@ async function advance(host, gameId) {
   const { byChain } = assignItems(items, active);
   updates[`assignments/${r + 1}`] = byChain;
   updates["round"] = { index: r + 1, type: segmentType(r + 1, offset), state: "active", startOffset: offset };
+  updates["submitted"] = null;
   await update(ref(host.db, G(gameId)), updates);
   return { finished: false, round: r + 1, assignments: byChain };
 }
@@ -157,7 +162,7 @@ async function everyoneSubmits(clients, gameId, round, label) {
       const payload = {};
       if (type !== "image") payload.word = `${label}-${c.label}`;
       if (type !== "word") payload.drawing = { w: 400, h: 300, strokes: [{ color: "#111", width: 0.02, points: [[0.1, 0.1], [0.9, 0.9]] }] };
-      await saveDraft(c, gameId, round, cid, payload);
+      await submitChain(c, gameId, round, cid, payload);
     }
   }
   return assignR;
@@ -226,6 +231,11 @@ async function main() {
         let draftDenied = false;
         try { await saveDraft(B, gameId, r, someoneElsesChain, { word: "sneaky" }); } catch { draftDenied = true; }
         ok(draftDenied, "a player cannot write a draft for a chain they aren't assigned");
+        let submitDenied = false;
+        try { await set(ref(B.db, `${G(gameId)}/submitted/${r}/${someoneElsesChain}`), true); } catch { submitDenied = true; }
+        ok(submitDenied, "a player cannot mark a chain they aren't assigned as submitted");
+        const sub = await snap(A.db, `${G(gameId)}/submitted/${r}`) || {};
+        ok(Object.keys(assignR).every((cid) => sub[cid]), "every assigned chain is marked submitted");
       }
       const res = await advance(A, gameId);
       if (!res.finished) {

@@ -33,8 +33,11 @@ export async function mount(el, params) {
         <label class="row">
           <input type="checkbox" id="h-plays" /> I'll also play (join the pool)
         </label>
-        <label>Seconds per turn
-          <input type="number" id="h-timer" value="60" min="10" max="600" />
+        <label>Draw timer (s)
+          <input type="number" id="h-draw-timer" value="45" min="5" max="600" />
+        </label>
+        <label>Word timer (s)
+          <input type="number" id="h-word-timer" value="30" min="5" max="600" />
         </label>
         <label>Passes <span class="hint">(blank = players − 1, auto-even)</span>
           <input type="number" id="h-passes" placeholder="auto" min="1" max="40" />
@@ -77,7 +80,8 @@ export async function mount(el, params) {
   $("#h-go").addEventListener("click", async () => {
     const name = $("#h-name").value.trim() || "Host";
     const gmPlays = $("#h-plays").checked;
-    const timerDurationSec = Math.max(10, Number($("#h-timer").value) || 60);
+    const drawTimerSec = Math.max(5, Number($("#h-draw-timer").value) || 45);
+    const wordTimerSec = Math.max(5, Number($("#h-word-timer").value) || 30);
     const passesRaw = $("#h-passes").value.trim();
     const passesOverride = passesRaw === "" ? null : Number(passesRaw);
     const useWordBank = $("#h-bank").checked;
@@ -86,7 +90,7 @@ export async function mount(el, params) {
     $("#h-err").textContent = "";
     try {
       localStorage.setItem("ldd-name", name);
-      const { gameId } = await createGame({ gmName: name, gmPlays, timerDurationSec, passesOverride, useWordBank, wordList, crowdWords });
+      const { gameId } = await createGame({ gmName: name, gmPlays, drawTimerSec, wordTimerSec, passesOverride, useWordBank, wordList, crowdWords });
       location.hash = `#/gm?id=${gameId}`;
     } catch (e) {
       $("#h-err").textContent = e.message || String(e);

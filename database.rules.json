@@ -31,6 +31,13 @@
               ".write": "auth != null && (root.child('games').child($gid).child('assignments').child($round).child($chainId).val() === auth.uid || root.child('games').child($gid).child('meta/createdBy').val() === auth.uid)"
             }
           }
+        },
+        "submitted": {
+          "$round": {
+            "$chainId": {
+              ".write": "auth != null && (root.child('games').child($gid).child('assignments').child($round).child($chainId).val() === auth.uid || root.child('games').child($gid).child('meta/createdBy').val() === auth.uid)"
+            }
+          }
         }
       }
     }

@@ -283,7 +283,7 @@ export async function advance(gameId) {
     });
     updates["round/state"] = "review";
     updates["meta/status"] = "review";
-    updates["timer"] = { state: "paused", remainingMs: 0, durationSec: game.settings.timerDurationSec, endsAt: null };
+    updates["timer"] = { state: "paused", remainingMs: 0, durationSec: 0, endsAt: null };
     updates["submitted"] = null;
     await update(ref(db, G(gameId)), updates);
     return { finished: true };
