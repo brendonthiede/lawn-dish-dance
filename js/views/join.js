@@ -37,7 +37,7 @@ export async function mount(el, params) {
           <input type="number" id="h-timer" value="60" min="10" max="600" />
         </label>
         <label>Passes <span class="hint">(blank = players − 1, auto-even)</span>
-          <input type="number" id="h-passes" placeholder="auto" min="2" max="40" />
+          <input type="number" id="h-passes" placeholder="auto" min="1" max="40" />
         </label>
         <label class="row">
           <input type="checkbox" id="h-bank" /> Use a word bank for starting words

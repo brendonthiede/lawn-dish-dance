@@ -31,7 +31,7 @@ describe("assignItems", () => {
     const rng = mulberry32(42);
     const players = ["a", "b", "c", "d", "e", "f"];
     const chains = players.map((p, i) => ({ chainId: "c" + i, authors: new Set([p]) }));
-    const passes = effectivePasses(players.length, null); // n-1 passes (5 for 6 players)
+    const passes = effectivePasses(players.length, null); // 5 passes for 6 players
     for (let r = 1; r <= passes; r++) {
       const items = chains.map((c) => ({ chainId: c.chainId, authors: [...c.authors] }));
       const { byChain, repeats } = assignItems(items, players, rng);
@@ -76,25 +76,20 @@ describe("assignItems", () => {
 });
 
 describe("util", () => {
-  it("effectivePasses is always >= 2 and equals n-1 for n >= 3", () => {
-    expect(effectivePasses(2, null)).toBe(2); // min 2
-    expect(effectivePasses(3, null)).toBe(2); // 3-1=2
-    expect(effectivePasses(4, null)).toBe(3); // 4-1=3 (was 2 before parity fix)
-    expect(effectivePasses(5, null)).toBe(4); // 5-1=4
-    expect(effectivePasses(6, null)).toBe(5); // 6-1=5 (was 4 before parity fix)
-    expect(effectivePasses(7, null)).toBe(6);
-    expect(effectivePasses(4, 3)).toBe(3);    // override: max(2,3)=3
-    expect(effectivePasses(4, 8)).toBe(8);    // override: max(2,8)=8
+  it("effectivePasses: n-1 for 2/4/6 players, else n-1 rounded down to even", () => {
+    const expected = { 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 6, 9: 8, 10: 8 };
+    for (const [n, passes] of Object.entries(expected)) expect(effectivePasses(Number(n), null)).toBe(passes);
+    expect(effectivePasses(5, 3)).toBe(3); // override used as typed
+    expect(effectivePasses(4, 8)).toBe(8);
+    expect(effectivePasses(4, 1)).toBe(1);
+    expect(effectivePasses(4, 0)).toBe(1); // min 1
   });
 
-  it("startOffset is 1 for odd passes (even player counts), 0 for even passes", () => {
-    expect(startOffset(2)).toBe(0); // n=2: passes=2 (even) → word-first
-    expect(startOffset(3)).toBe(1); // n=4: passes=3 (odd) → image-first
-    expect(startOffset(4)).toBe(0); // n=5: passes=4 (even) → word-first
-    expect(startOffset(5)).toBe(1); // n=6: passes=5 (odd) → image-first
-    expect(startOffset(6)).toBe(0);
-    expect(startOffset(7)).toBe(1);
-    expect(startOffset(8)).toBe(0);
+  it("startOffset is 1 for odd passes, 0 for even passes", () => {
+    expect(startOffset(1)).toBe(1);
+    expect(startOffset(2)).toBe(0);
+    expect(startOffset(3)).toBe(1);
+    expect(startOffset(4)).toBe(0);
   });
 
   it("segmentType without offset alternates word/image starting with word", () => {
@@ -105,20 +100,27 @@ describe("util", () => {
     expect(segmentType(4)).toBe("word");
   });
 
-  it("segmentType with offset=1 starts with image (draw-first for even players)", () => {
-    expect(segmentType(0, 1)).toBe("image");
+  it("segmentType with offset=1 opens with write + draw, then guesses", () => {
+    expect(segmentType(0, 1)).toBe("combo");
     expect(segmentType(1, 1)).toBe("word");
     expect(segmentType(2, 1)).toBe("image");
     expect(segmentType(3, 1)).toBe("word");
   });
 
-  it("final pass is always a word/guess for player counts 2–10", () => {
-    for (let n = 2; n <= 10; n++) {
-      const passes = effectivePasses(n, null);
+  it("every game starts with a word and ends on a word; combo only for 2/4/6 players", () => {
+    const cases = [];
+    for (let n = 2; n <= 10; n++) cases.push([n, null]);
+    cases.push([5, 3], [5, 1], [8, 7], [3, 4]);
+    for (const [n, override] of cases) {
+      const passes = effectivePasses(n, override);
       const offset = startOffset(passes);
-      const finalType = segmentType(passes, offset);
-      expect(finalType).toBe("word",
-        `n=${n}: passes=${passes}, offset=${offset} → expected "word" but got "${finalType}"`);
+      const label = `n=${n} override=${override} passes=${passes}`;
+      expect(["word", "combo"], label).toContain(segmentType(0, offset));
+      expect(segmentType(passes, offset), label).toBe("word");
+      for (let r = 1; r < passes; r++) {
+        expect(segmentType(r, offset), label).not.toBe(segmentType(r + 1, offset));
+      }
+      if (override == null) expect(segmentType(0, offset) === "combo", label).toBe([2, 4, 6].includes(n));
     }
   });
 });
@@ -135,6 +137,10 @@ describe("getPhaseDuration", () => {
   it("falls back to timerDurationSec when phase-specific timer is absent", () => {
     expect(getPhaseDuration("image", { timerDurationSec: 60 })).toBe(60);
     expect(getPhaseDuration("word", { timerDurationSec: 60 })).toBe(60);
+  });
+
+  it("gives the combo opener both timers", () => {
+    expect(getPhaseDuration("combo", { drawTimerSec: 45, wordTimerSec: 30 })).toBe(75);
   });
 
   it("falls back to 60s when settings are empty", () => {

@@ -85,12 +85,13 @@ export async function mount(el, params) {
       strip.className = "d-strip";
       order.forEach((i) => {
         const s = segs[i];
-        if (s.type === "word") {
+        if (s.word != null) {
           const w = document.createElement("div");
           w.className = "d-strip-word";
           w.textContent = s.word || "—";
           strip.appendChild(w);
-        } else {
+        }
+        if (s.drawing) {
           const c = document.createElement("canvas");
           c.className = "d-strip-img";
           strip.appendChild(c);

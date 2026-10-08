@@ -153,7 +153,7 @@ function activeMembers(game) {
 
 // --- start ----------------------------------------------------------------
 
-/** GM-only: leave the lobby and start round 0 (everyone writes a seed word or draws). */
+/** GM-only: leave the lobby and start round 0 (everyone writes a seed word, and draws it too when passes is odd). */
 export async function startGame(gameId) {
   const game = await snap(G(gameId));
   const pool = poolMembers(game).filter((p) => game.players[p].connected !== false);
@@ -261,9 +261,10 @@ export async function advance(gameId) {
   Object.keys(assignR).forEach((cid) => {
     const uid = assignR[cid];
     const d = draftsR[cid] || {};
-    const seg = { type: segmentType(r, offset), playerId: uid, submittedAt: serverTimestamp() };
-    if (segmentType(r, offset) === "word") seg.word = String(d.word || "").slice(0, 80);
-    else seg.drawing = d.drawing || { w: 1, h: 1, strokes: [] };
+    const type = segmentType(r, offset);
+    const seg = { type, playerId: uid, submittedAt: serverTimestamp() };
+    if (type !== "image") seg.word = String(d.word || "").slice(0, 80);
+    if (type !== "word") seg.drawing = d.drawing || { w: 1, h: 1, strokes: [] };
     updates[`chains/${cid}/segments/${r}`] = seg;
     chains[cid] = chains[cid] || {};
     chains[cid].segments = chains[cid].segments || {};

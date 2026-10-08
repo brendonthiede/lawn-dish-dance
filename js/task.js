@@ -66,7 +66,15 @@ export function createTaskController({ gameId, uid, container }) {
     const wrap = document.createElement("div");
     wrap.className = "card task";
 
-    if (r === 0 && type === "word" && game.settings?.useWordBank) {
+    if (type === "combo") {
+      wrap.innerHTML = `<h2>Your starting word, then draw it</h2><p class="muted">The next player only sees your drawing.</p>`;
+      wrap.appendChild(game.settings?.useWordBank ? mkWordChoices(cid) : mkWordInput(cid));
+      const c = document.createElement("canvas");
+      c.className = "pad";
+      wrap.appendChild(c);
+      wrap.appendChild(mkTools(cid));
+      queueMicrotask(() => { pads[cid] = createDrawingPad(c); });
+    } else if (r === 0 && type === "word" && game.settings?.useWordBank) {
       wrap.innerHTML = `<h2>Your starting word</h2><p class="muted">Pick one for someone to draw.</p>`;
       wrap.appendChild(mkWordChoices(cid));
     } else if (r === 0 && type === "word") {
@@ -80,8 +88,7 @@ export function createTaskController({ gameId, uid, container }) {
       wrap.appendChild(mkWordInput(cid));
       queueMicrotask(() => renderDrawing(c, prev?.drawing));
     } else {
-      // image / draw phase — includes even-player "draw first" round 0
-      const prompt = r === 0 ? "Draw anything!" : (prev?.word || "…");
+      const prompt = prev?.word || "…";
       wrap.innerHTML = `<h2>Draw this</h2><p class="prompt-word">${esc(prompt)}</p>`;
       const c = document.createElement("canvas");
       c.className = "pad";
@@ -205,10 +212,11 @@ export function createTaskController({ gameId, uid, container }) {
   }
 
   function currentPayload(cid) {
-    if (pads[cid]) return { drawing: pads[cid].getDrawing() };
-    if (wordEls[cid]) return { word: wordEls[cid].value.trim() };
-    if (cid in selectedWord) return { word: selectedWord[cid] };
-    return null;
+    const p = {};
+    if (wordEls[cid]) p.word = wordEls[cid].value.trim();
+    else if (cid in selectedWord) p.word = selectedWord[cid];
+    if (pads[cid]) p.drawing = pads[cid].getDrawing();
+    return Object.keys(p).length ? p : null;
   }
 
   function saveNow(cid) {

@@ -24,8 +24,11 @@ stored as compact vector strokes in the database.
   - a **late joiner** spawns an *alternate branch* of an existing word,
   - a **leaver** collapses an alternate branch (or, if none, one player works
     two chains that round),
-  - default passes = `players − 1` rounded down to even so each chain
-    **ends on a word** (GM can override).
+  - every chain **starts and ends on a word**. Default passes = `players − 1`
+    rounded down to even, except for 2, 4 or 6 players, who play
+    `players − 1` passes with a **write + draw** first turn (they write the word,
+    then draw it). A GM override is used as typed; an odd override also gets
+    the write + draw opener.
 - **Timer sync** uses a single `endsAt` timestamp; every client counts down
   locally with clock-skew correction — no per-second writes.
 
@@ -81,7 +84,7 @@ npm test                  # vitest — covers the assignment/branching engine
 
 `tests/assign.test.js` verifies: no within-chain author repeats over a full
 game, doubling when a player leaves with no branch to collapse, balanced load,
-and that pass counts stay even (chains end on a word).
+and that every chain starts and ends on a word.
 
 ## Manual end-to-end check
 

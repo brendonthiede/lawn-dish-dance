@@ -11,7 +11,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getDatabase, ref, get, set, update, remove } from "firebase/database";
 import { firebaseConfig } from "../js/firebase-config.js";
 import { assignItems } from "../js/assign.js";
-import { makeCode, makeId, segmentType, effectivePasses } from "../js/util.js";
+import { makeCode, makeId, segmentType, effectivePasses, startOffset } from "../js/util.js";
 
 let pass = 0, fail = 0;
 const ok = (cond, msg) => { if (cond) { pass++; console.log(`  ✓ ${msg}`); } else { fail++; console.error(`  ✗ ${msg}`); } };
@@ -75,12 +75,14 @@ async function startGame(host, gameId) {
   const game = await snap(host.db, G(gameId));
   const pool = Object.keys(game.players).filter((p) => (game.players[p].isGM ? game.meta.gmPlays : true));
   const passes = effectivePasses(pool.length, game.settings.passesOverride);
+  const offset = startOffset(passes);
   const updates = {}; const a0 = {};
   pool.forEach((p) => { const cid = makeId(10); updates[`chains/${cid}`] = { seedWord: "", seedPlayer: p, status: "active", branchOf: null }; a0[cid] = p; });
   updates["assignments/0"] = a0;
-  updates["round"] = { index: 0, type: "word", state: "active" };
+  updates["round"] = { index: 0, type: segmentType(0, offset), state: "active", startOffset: offset };
   updates["meta/status"] = "playing";
   updates["meta/totalPasses"] = passes;
+  updates["meta/startOffset"] = offset;
   await update(ref(host.db, G(gameId)), updates);
   return passes;
 }
@@ -92,6 +94,7 @@ async function saveDraft(c, gameId, round, chainId, payload) {
 async function advance(host, gameId) {
   const game = await snap(host.db, G(gameId));
   const r = game.round.index;
+  const offset = game.meta?.startOffset ?? 0;
   const updates = {};
   const assignR = game.assignments?.[r] || {};
   const draftsR = game.drafts?.[r] || {};
@@ -99,9 +102,10 @@ async function advance(host, gameId) {
 
   Object.keys(assignR).forEach((cid) => {
     const uid = assignR[cid]; const d = draftsR[cid] || {};
-    const seg = { type: segmentType(r), playerId: uid, submittedAt: Date.now() };
-    if (segmentType(r) === "word") seg.word = String(d.word || "").slice(0, 80);
-    else seg.drawing = d.drawing || { w: 1, h: 1, strokes: [] };
+    const type = segmentType(r, offset);
+    const seg = { type, playerId: uid, submittedAt: Date.now() };
+    if (type !== "image") seg.word = String(d.word || "").slice(0, 80);
+    if (type !== "word") seg.drawing = d.drawing || { w: 1, h: 1, strokes: [] };
     updates[`chains/${cid}/segments/${r}`] = seg;
     chains[cid].segments = chains[cid].segments || {}; chains[cid].segments[r] = seg;
     if (r === 0) { updates[`chains/${cid}/seedWord`] = seg.word; chains[cid].seedWord = seg.word; }
@@ -138,7 +142,7 @@ async function advance(host, gameId) {
   const items = activeChainIds.map((cid) => ({ chainId: cid, authors: authorsOf(cid) }));
   const { byChain } = assignItems(items, active);
   updates[`assignments/${r + 1}`] = byChain;
-  updates["round"] = { index: r + 1, type: segmentType(r + 1), state: "active" };
+  updates["round"] = { index: r + 1, type: segmentType(r + 1, offset), state: "active", startOffset: offset };
   await update(ref(host.db, G(gameId)), updates);
   return { finished: false, round: r + 1, assignments: byChain };
 }
@@ -146,12 +150,13 @@ async function advance(host, gameId) {
 // Players fill their assigned chains for the current round.
 async function everyoneSubmits(clients, gameId, round, label) {
   const assignR = await snap(clients[0].db, `${G(gameId)}/assignments/${round}`) || {};
+  const type = segmentType(round, (await snap(clients[0].db, `${G(gameId)}/meta/startOffset`)) ?? 0);
   const byUid = {}; Object.entries(assignR).forEach(([cid, uid]) => { (byUid[uid] = byUid[uid] || []).push(cid); });
   for (const c of clients) {
     for (const cid of byUid[c.uid] || []) {
-      const payload = segmentType(round) === "word"
-        ? { word: `${label}-${c.label}` }
-        : { drawing: { w: 400, h: 300, strokes: [{ color: "#111", width: 0.02, points: [[0.1, 0.1], [0.9, 0.9]] }] } };
+      const payload = {};
+      if (type !== "image") payload.word = `${label}-${c.label}`;
+      if (type !== "word") payload.drawing = { w: 400, h: 300, strokes: [{ color: "#111", width: 0.02, points: [[0.1, 0.1], [0.9, 0.9]] }] };
       await saveDraft(c, gameId, round, cid, payload);
     }
   }
@@ -203,7 +208,7 @@ async function main() {
 
     console.log("4. Start game");
     const passes = await startGame(A, gameId);
-    ok(passes % 2 === 0 && passes >= 2, `pass count is even (ends on a word): ${passes}`);
+    ok(passes === 2, `3 players → 2 passes (starts and ends on a word): ${passes}`);
     const chains0 = await snap(A.db, `${G(gameId)}/chains`);
     ok(Object.keys(chains0).length === 3, "one seed chain per player");
 
@@ -279,10 +284,26 @@ async function main() {
     ok(branches.length === 1, "the new chain is an alternate branch of an existing word");
     const a2 = await snap(A.db, `${G(g2)}/assignments/2`);
     ok(Object.keys(a2).length === 4 && new Set(Object.values(a2)).size === 4, "round 2 assigns all 4 players, one chain each");
+
+    console.log("10. Four players: write + draw opener");
+    const { gameId: g3, code: code3 } = await createGame(A, { gmPlays: true });
+    created.push({ db: A.db, gameId: g3, code: code3 });
+    await joinGame(B, g3); await joinGame(C, g3); await joinGame(D, g3);
+    const p4 = await startGame(A, g3);
+    ok(p4 === 3, `4 players → 3 passes: ${p4}`);
+    ok((await snap(A.db, `${G(g3)}/round/type`)) === "combo", "round 0 is write + draw");
+    for (let r = 0; r <= p4; r++) {
+      await everyoneSubmits([A, B, C, D], g3, r, `g3r${r}`);
+      await advance(A, g3);
+    }
+    const c4 = Object.values(await snap(A.db, `${G(g3)}/chains`))[0];
+    ok(c4.segments[0].type === "combo" && !!c4.segments[0].word && !!c4.segments[0].drawing, "seed segment has the word and its drawing");
+    ok(c4.seedWord === c4.segments[0].word, "seed word captured from the combo round");
+    ok(c4.segments[1].type === "word" && c4.segments[p4].type === "word", "first pass is a guess and the final segment is a word");
   } catch (e) {
     fail++; console.error("\n✗ UNCAUGHT:", e?.code || "", e?.message || e);
   } finally {
-    console.log("\n9. Cleanup");
+    console.log("\n11. Cleanup");
     for (const { db, gameId, code } of created) {
       try { await remove(ref(db, G(gameId))); await remove(ref(db, `codes/${code}`)); } catch (e) { console.error("  cleanup err:", e?.message); }
     }

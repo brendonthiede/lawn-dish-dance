@@ -123,12 +123,13 @@ export async function mount(el, params) {
     const segs = chain.segments || {};
     Object.keys(segs).map(Number).sort((a, b) => a - b).forEach((i) => {
       const s = segs[i];
-      if (s.type === "word") {
+      if (s.word != null) {
         const w = document.createElement("div");
         w.className = "chain-word";
         w.textContent = s.word || "—";
         card.appendChild(w);
-      } else {
+      }
+      if (s.drawing) {
         const c = document.createElement("canvas");
         c.className = "chain-img";
         card.appendChild(c);

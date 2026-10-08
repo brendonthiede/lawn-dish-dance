@@ -77,7 +77,7 @@ export async function mount(el, params) {
           </label>
         </details>
         <label>Passes <span class="hint">(blank = auto)</span>
-          <input type="number" id="s-passes" min="2" max="40" value="${game.settings.passesOverride ?? ""}" placeholder="auto"/></label>
+          <input type="number" id="s-passes" min="1" max="40" value="${game.settings.passesOverride ?? ""}" placeholder="auto"/></label>
         <label class="row"><input type="checkbox" id="s-bank" ${game.settings.useWordBank ? "checked" : ""}/> Word bank for starting words</label>
         <div id="s-bank-opts" ${game.settings.useWordBank ? "" : "hidden"}>
           <label class="row"><input type="checkbox" id="s-crowd" ${game.settings.crowdWords ? "checked" : ""}/> Let players add words in the lobby</label>
@@ -119,10 +119,9 @@ export async function mount(el, params) {
   function renderPlaying() {
     const r = game.round.index;
     const total = game.meta.totalPasses;
-    const offset = game.meta?.startOffset ?? 0;
     const isDrawPhase = game.round.type === "image";
     const label = r === 0
-      ? (isDrawPhase ? "Starting drawing" : "Starting word")
+      ? (game.round.type === "combo" ? "Starting word + drawing" : "Starting word")
       : (isDrawPhase ? `Pass ${r}: draw it` : `Pass ${r}: write a word`);
 
     body.innerHTML = `
@@ -197,10 +196,10 @@ export async function mount(el, params) {
   function reviewCard(cid, chain) {
     const segs = chain.segments || {};
     const order = Object.keys(segs).map(Number).sort((a, b) => a - b);
-    const imgs = order.filter((i) => segs[i].type === "image");
+    const imgs = order.filter((i) => segs[i].drawing);
     const firstImg = imgs[0];
     const lastImg = imgs[imgs.length - 1];
-    const words = order.filter((i) => segs[i].type === "word");
+    const words = order.filter((i) => segs[i].word != null);
     const finalWord = segs[words[words.length - 1]]?.word || "—";
     const highlighted = game.highlights?.[cid] ? " highlighted" : "";
     return `
@@ -261,7 +260,7 @@ export async function mount(el, params) {
       const n = poolCount();
       const passes = effectivePasses(n, game.settings.passesOverride);
       const offset = startOffset(passes);
-      const firstAction = offset ? "draw" : "write a word";
+      const firstAction = offset ? "write + draw" : "write a word";
       poolLine.innerHTML = `Pool: <b>${n}</b> connected player(s) → each chain passes <b>${passes}</b> times (starts with ${firstAction}, ends on a word).`;
     }
     const crowdCount = body.querySelector("#crowd-count");
